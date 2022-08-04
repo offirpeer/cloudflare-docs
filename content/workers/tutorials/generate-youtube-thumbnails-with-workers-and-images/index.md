@@ -159,7 +159,7 @@ Next, we'll create a `handle-slash` function that'll activate the image transfor
 ```rs
 ---
 filename: lib.rs
-highlight: [19]
+highlight: [17]
 ---
 use text_to_png::{TextPng, TextRenderer};
 use worker::*;
@@ -182,11 +182,10 @@ async fn handle_slash(text: String) -> Result<Response> {}
 
 In this function, we'll call the `TextRenderer` by assigning it to a renderer value, specifying that we want to use a custom font. Following that, we'll use the `render_text_to_png_data` method to transform the text into image format.
 
-
 ```rs
 ---
 filename: lib.rs
-highlight: [19, 20, 21, 22, 23, 24, 25, 26]
+highlight: [17, 18, 19, 20, 21, 22, 23, 24]
 ---
 use text_to_png::{TextPng, TextRenderer};
 use worker::*;
@@ -215,14 +214,89 @@ async fn handle_slash(text: String) -> Result<Response> {
 Here, we're setting the headers to `content-type: 'image/png'` so the text displayed on the browser is a png image.
 
 ```rs
-let mut headers = Headers::new();
+---
+filename: lib.rs
+highlight: [23, 24, 25, 26]
+---
+use text_to_png::{TextPng, TextRenderer};
+use worker::*;
+mod utils;
+
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
+   // Optionally, get more helpful error messages written to the console in the case of a panic.
+   utils::set_panic_hook();
+
+   let router = Router::new();
+   router
+       .get("/", |_, _| Response::ok("Hello from Workers!"))
+       .run(req, env)
+       .await
+}
+
+async fn handle_slash(text: String) -> Result<Response> {
+  let renderer = TextRenderer::try_new_with_ttf_font_data(include_bytes!("../assets/Inter-Bold.ttf"))
+    .expect("Example font is definitely loadable");
+
+  let text_png: TextPng = renderer.render_text_to_png_data(text.replace("+", " "), 60, "003682").unwrap();
+
+  let mut headers = Headers::new();
   headers.set("content-type", "image/png")?;
 
   Ok(Response::from_bytes(text_png.data)?.with_headers(headers))
+}
 ```
 
 The final lib.rs file should look as follows (you can also find the full code as an example repository at [github.com/lauragift21/worker-to-text](https://github.com/lauragift21/worker-to-text)).
 
+```rs
+---
+filename: lib.rs
+---
+use text_to_png::{TextPng, TextRenderer};
+use worker::*;
+
+mod utils;
+
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
+    // Optionally, get more helpful error messages written to the console in the case of a panic.
+    utils::set_panic_hook();
+
+    let router = Router::new();
+
+    router
+        .get_async("/", |req, _| async move {
+            if let Some(text) = req.url()?.query() {
+                handle_slash(text.into()).await
+            } else {
+                handle_slash("Hello Worker!".into()).await
+            }
+        })
+        .run(req, env)
+        .await
+}
+
+async fn handle_slash(text: String) -> Result<Response> {
+    let renderer = TextRenderer::try_new_with_ttf_font_data(include_bytes!("../assets/Inter-Bold.ttf"))
+    .expect("Example font is definitely loadable");
+
+    let text = if text.len() > 128 {
+        "Nope".into()
+    } else {
+        text
+    };
+
+    let text = urlencoding::decode(&text).map_err(|_| worker::Error::BadEncoding)?;
+
+    let text_png: TextPng = renderer.render_text_to_png_data(text.replace("+", " "), 60, "003682").unwrap();
+
+    let mut headers = Headers::new();
+    headers.set("content-type", "image/png")?;
+
+    Ok(Response::from_bytes(text_png.data)?.with_headers(headers))
+}
+```
 
 Let's run the code with the command:
 
@@ -284,22 +358,59 @@ In this part of the tutorial, we'll use the [image resizing service](/images/ima
 
 
 ```js
-if (url.pathname === '/thumbnail') { }
+---
+filename: index.js
+highlight: [11]
+---
+export default {
+ async fetch(request, env) {
+   const url = new URL(request.url)
+   if (url.pathname === '/original-image') {
+     const image = await fetch(
+       `https://imagedelivery.net/${env.CLOUDFLARE_ACCOUNT_HASH}/${IMAGE_ID}/public`
+     );
+     return image;
+   }
+
+   if (url.pathname === '/thumbnail') { }
+
+   return new Response('Image Resizing with a Worker')
+ }
+}
 ```
 
 Next, we'll use the fetch method to apply the changes on top of the image. The overlay options are nested in options.cf.image.
 
 ```js
-if (url.pathname === '/thumbnail') {
- fetch(imageURL, {
-   cf: {
-     image: {}
+---
+filename: index.js
+highlight: [12, 13, 14, 15, 16, 17, 18]
+---
+export default {
+ async fetch(request, env) {
+   const url = new URL(request.url)
+
+   if (url.pathname === '/original-image') {
+     const image = await fetch(
+       `https://imagedelivery.net/${env.CLOUDFLARE_ACCOUNT_HASH}/${IMAGE_ID}/public`
+     );
+     return image;
    }
- })
+
+  if (url.pathname === '/thumbnail') {
+    fetch(imageURL, {
+      cf: {
+        image: {}
+      }
+    })
+  }
+
+   return new Response('Image Resizing with a Worker')
+ }
 }
 ```
 
-The **imageURL** is the URL of the image you want to use as a background and where you have the cf.image object, there you can specify the options you want to apply to the image.
+The **`imageURL`** is the URL of the image you want to use as a background and where you have the `cf.image` object, there you can specify the options you want to apply to the image.
 
 At the time of this writing, **Cloudflare Image Resizing** doesn't allow resizing images in a worker that is stored in Cloudflare Images. So instead of using the image we served on the /original-image route, we'll use the same image from a different source.
 
@@ -369,7 +480,7 @@ for (const title of url.searchParams.values()) {
           height: 720,
           draw: [
             {
-              url: `https://text-to-image.examples.workers.dev/?${title}`, // draw this image
+              url: `https://text-to-image.examples.workers.dev/?${title}`,
               left: 50
             }
           ],
